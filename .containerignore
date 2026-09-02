@@ -1,6 +1,5 @@
-__pycache__
+.git/
+__pycache__/
 *.pyc
-*.pyo
-.git
-.gitignore
-outputs/
+data/
+*.pkl

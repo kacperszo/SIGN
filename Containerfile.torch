@@ -1,0 +1,44 @@
+# SIGN on PyTorch — the rewrite, replacing the PaddlePaddle original.
+#
+# The model has no published weights, so nothing here can be checked against reference
+# numbers and training is required either way. Running the original would have meant a second
+# framework, a second package index (paddlepaddle.org.cn) and a second GPU stack for one
+# model, buying nothing in fidelity. The port lives in sign_torch/.
+#
+# `preprocess_pdbbind.py` and `featurizer.py` are reused unchanged: neither contains a single
+# Paddle reference. Only `dataset.py`, which built the PGL graphs, needed rewriting.
+FROM docker.io/mambaorg/micromamba:1.5.8
+
+USER root
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+
+# openbabel has no pip wheel; the preprocessing reads mol2 through pybel
+RUN micromamba install -y -n base -c conda-forge \
+        python=3.10 openbabel libstdcxx-ng \
+    && micromamba clean --all --yes
+ENV PATH=/opt/conda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/conda/lib
+
+RUN pip install --no-cache-dir torch==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+# torch_geometric only; no torch_scatter. The port uses torch's own scatter_add_ and takes
+# just `softmax` from PyG, and modern PyG no longer needs the compiled extensions — which
+# also removes the one dependency here that builds from source when its wheel index is
+# unreachable.
+RUN pip install --no-cache-dir torch_geometric
+
+RUN pip install --no-cache-dir \
+    "numpy<2" \
+    scipy \
+    pandas \
+    scikit-learn \
+    tqdm \
+    pytest
+
+RUN python -c "import torch, torch_geometric, numpy, scipy; \
+from openbabel import pybel; print('env ok', torch.__version__)"
+
+WORKDIR /work
+COPY . /work
+
+# the property tests are the only check this model has, so they run at build time
+RUN python -m pytest sign_torch/test_port.py -q

@@ -1,0 +1,6 @@
+
+# trained weights: reproducible from sign_torch/train.py, and too large for a git remote
+checkpoint_trained.pt
+*.pt
+__pycache__/
+*.pyc
