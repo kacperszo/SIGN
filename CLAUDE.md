@@ -124,10 +124,36 @@ podman run --rm --network=none --shm-size=4g --device nvidia.com/gpu=all \
 `Containerfile.torch` is the CPU variant, for tests only — one epoch over 4285 complexes does
 not finish in minutes on CPU.
 
+## Running it in the harness
+
+`sign.torch` is registered, with `predict` and `embed` from one forward — the model already
+returns both, so the 128-dim embedding is native rather than pooled by us.
+
+```bash
+gnnb verify --variant sign.torch --dataset data/CASF-2016/coreset
+gnnb run --variant sign.torch --capability predict --dataset <complexes> --gpu
+```
+
+The golden is this checkpoint's own recorded output, so `verify` is a regression check on the
+port and its environment — SIGN publishes no weights, so there is nothing external to be
+faithful to.
+
+Two things had to be fixed to get there, and both were latent rather than introduced:
+
+- **`train.py` hardcoded `dense_dims=(512, 256, 128)` and never recorded it.** `model.py`
+  defaults to `(128, 128, 64)`, so the checkpoint could only be reloaded by someone who
+  already knew what it was trained with. It is written into the checkpoint now, and
+  `predict.py` falls back to the old value for files written before that.
+- **`collate` assumed every graph carried a label.** `prepare.py` sets `y` to `None` when no
+  label file is given — which is exactly the scoring case — and `hasattr` is true for it, so
+  `torch.cat` failed several frames from the cause.
+
 ## Next
 
-1. The trained checkpoint is **not committed** (7 MB, and reproducible from `train.py`). Decide
-   where it should live if it is worth keeping.
+1. The trained checkpoint is **not committed** — `.gitignore` excludes `*.pt`, deliberately.
+   The registry bind-mounts it from the working tree, so a fresh clone has to train it or be
+   handed the file. It is baked into the image by `COPY . /work` as a side effect, which is
+   worth knowing before assuming an image is reproducible from the repository alone.
 2. Two hyperparameters were left at the authors' defaults but never swept: `lambda_` 1.75 on the
    auxiliary loss, and `dec_step` 8000. Neither was tuned for our split size.
 3. The `DomainAttentionLayer` self-concatenation, as an ablation.

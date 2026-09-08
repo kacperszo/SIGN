@@ -50,7 +50,11 @@ def collate(graphs: list) -> object:
             b2b[k].append(e + bond_offset)
         bond_types.append(g.bond_types)
         type_counts.append(g.type_count.reshape(-1, 1))
-        ys.append(g.y if hasattr(g, "y") else torch.zeros(1))
+        # `hasattr` is not enough: prepare.py sets `y` to None when no label file was given,
+        # so an unlabelled graph has the attribute and it holds nothing. Scoring new
+        # complexes is exactly that case, and torch.cat on a None fails several frames away
+        # from the cause.
+        ys.append(getattr(g, "y", None))
         atom_offset += g.num_nodes
         bond_offset += g.num_bonds
 
@@ -63,7 +67,7 @@ def collate(graphs: list) -> object:
         b2b_edge_index_list=[torch.cat(e, dim=1) for e in b2b],
         bond_types=torch.cat(bond_types),
         type_count=torch.cat(type_counts, dim=1),
-        y=torch.cat(ys),
+        y=torch.cat(ys) if all(v is not None for v in ys) else None,
         num_graphs=len(graphs),
     )
 
@@ -105,8 +109,13 @@ def main() -> None:
     val = torch.load(args.val_graphs, weights_only=False) if args.val_graphs else None
     print(f"{len(train)} training graphs" + (f", {len(val)} validation" if val else ""))
 
+    # The authors' head widths, and wider than model.py's default of (128, 128, 64). Named
+    # here so it can be written into the checkpoint below: a saved network that does not
+    # record every size needed to rebuild it can only be reloaded by someone who already
+    # knows what it was.
+    dense_dims = (512, 256, 128)
     model = SIGN(infeat_dim=train[0].x.shape[1], hidden_dim=args.hidden_dim,
-                 num_convs=args.num_convs, dense_dims=(512, 256, 128),
+                 num_convs=args.num_convs, dense_dims=dense_dims,
                  num_angle=args.num_angle).to(device)
     optimiser = Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -178,6 +187,7 @@ def main() -> None:
                         "infeat_dim": train[0].x.shape[1],
                         "hidden_dim": args.hidden_dim,
                         "num_convs": args.num_convs,
+                        "dense_dims": list(dense_dims),
                         "num_angle": args.num_angle}, args.out)
 
     print(f"\nbest {best:.4f} -> {args.out}  ({time.time() - started:.0f}s)")

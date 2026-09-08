@@ -10,12 +10,26 @@ GPU stack for one model, and bought nothing in fidelity. `preprocess_pdbbind.py`
 Trained and evaluated: CASF-2016 **R 0.725**, ranking **rho 0.653** — the best ranking of every
 model measured — and a 128-dimensional native embedding that retains 98% of its own head.
 
-**Not registered as a harness variant yet**, so there is no `gnnb run` for it; it is driven
-directly.
+| variant | capabilities | `gnnb verify` on CASF-2016 |
+|---|---|---|
+| `sign.torch` | predict, embed | 285/285, max abs diff 8.9e-16 |
+
+The golden is this checkpoint's own recorded output. SIGN publishes no weights, so there is
+nothing external to be faithful to and `verify` is a regression check on the port and its
+environment rather than a fidelity claim.
 
 ```bash
-podman build --format=docker -f Containerfile.gpu -t sign-gpu:latest .
+podman build --format=docker -f Containerfile.torch -t sign:latest .        # cpu
+podman build --format=docker -f Containerfile.gpu   -t sign-gpu:latest .
+
+gnnb verify --variant sign.torch --dataset data/CASF-2016/coreset
+gnnb run --variant sign.torch --capability predict --dataset <complexes> --gpu
+gnnb run --variant sign.torch --capability embed   --dataset <complexes>
 ```
+
+**The trained checkpoint is not in git** — `.gitignore` excludes `*.pt` deliberately, and the
+registry bind-mounts it from the working tree. A fresh clone has to train it or be handed the
+file.
 
 It is the only model in the benchmark whose training data is known, and its split excludes the
 CASF-2016 core set explicitly. 266 of the 285 core-set complexes sit inside PDBbind refined and
