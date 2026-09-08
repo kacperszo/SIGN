@@ -1,3 +1,32 @@
+<!-- gnn-benchmark:begin -->
+# Running this in gnn-benchmark
+
+**Rewritten from PaddlePaddle + PGL to PyTorch here** — the Paddle path is abandoned. SIGN
+ships no checkpoints, so training was required either way and there was nothing to verify a
+faithful port against; running the original would have bought a second framework and a second
+GPU stack for one model, and bought nothing in fidelity. `preprocess_pdbbind.py` and
+`featurizer.py` contain no Paddle and are reused unchanged, so the featurisation is theirs.
+
+Trained and evaluated: CASF-2016 **R 0.725**, ranking **rho 0.653** — the best ranking of every
+model measured — and a 128-dimensional native embedding that retains 98% of its own head.
+
+**Not registered as a harness variant yet**, so there is no `gnnb run` for it; it is driven
+directly.
+
+```bash
+podman build --format=docker -f Containerfile.gpu -t sign-gpu:latest .
+```
+
+It is the only model in the benchmark whose training data is known, and its split excludes the
+CASF-2016 core set explicitly. 266 of the 285 core-set complexes sit inside PDBbind refined and
+no other repository here publishes a training list, so SIGN is being judged more strictly than
+everything beside it — report its numbers with that attached. Full commands and the caveat in
+[CLAUDE.md](CLAUDE.md).
+
+<!-- gnn-benchmark:end -->
+
+---
+
 ## SIGN-Paddle
 Source code for KDD 2021 paper: "Structure-aware Interactive Graph Neural Networks for the Prediction of Protein-Ligand Binding Affinity".
 <p align="center">
