@@ -40,5 +40,7 @@ from openbabel import pybel; print('env ok', torch.__version__)"
 WORKDIR /work
 COPY . /work
 
-# the property tests are the only check this model has, so they run at build time
-RUN python -m pytest sign_torch/test_port.py -q
+# the property tests are the only check this model has, so they run at build time.
+# test_transfer.py checks the encoder/head boundary, which is a different way to be wrong:
+# every failure there still trains and still prints a curve, just a worse one.
+RUN python -m pytest sign_torch/test_port.py sign_torch/test_transfer.py -q

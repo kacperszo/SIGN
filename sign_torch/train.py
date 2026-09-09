@@ -13,20 +13,32 @@ whose indices refer to different node sets — atoms, bonds, and bonds again per
 and PyG's collation only knows how to offset `edge_index` against `num_nodes`. Getting the
 bond offsets wrong would not raise; it would quietly wire one complex's bonds to another's.
 
+**Fine-tuning.** `--init-encoder` loads a representation somebody else trained and attaches a
+fresh head; `--freeze-encoder` trains the head alone. The boundary and the reasons for it are in
+`transfer.py`. The outputs follow the harness contract in `harness/training.py` — `model.pt`,
+`history.csv` and `summary.json` — so a transfer curve can be put beside another model's without
+either trainer knowing about the other.
+
 usage:
-    python -m sign_torch.train --graphs graphs.pt --out model.pt --epochs 50
+    python -m sign_torch.train --graphs graphs.pt --out /outputs --epochs 50
+    python -m sign_torch.train --graphs graphs.pt --out /outputs \
+        --init-encoder /ckpt/encoder.pt --freeze-encoder
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import time
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
 
 from .model import SIGN
+from .transfer import set_training_mode, transfer_encoder
 
 
 def collate(graphs: list) -> object:
@@ -83,7 +95,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train SIGN")
     parser.add_argument("--graphs", required=True)
     parser.add_argument("--val_graphs", default=None)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out", required=True,
+                        help="output directory; model.pt, history.csv and summary.json are "
+                             "written into it. A path ending in .pt is taken as the checkpoint "
+                             "itself and the other two go beside it, so older invocations keep "
+                             "working.")
+    parser.add_argument("--init-encoder", dest="init_encoder", default=None,
+                        help="encoder .pt from `gnnb encoder split` — start from a transferred "
+                             "representation with a fresh head")
+    parser.add_argument("--freeze-encoder", dest="freeze_encoder", action="store_true",
+                        help="train the heads only, with the encoder in eval mode so its "
+                             "dropout does not resample the representation each step")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -116,13 +138,26 @@ def main() -> None:
     dense_dims = (512, 256, 128)
     model = SIGN(infeat_dim=train[0].x.shape[1], hidden_dim=args.hidden_dim,
                  num_convs=args.num_convs, dense_dims=dense_dims,
-                 num_angle=args.num_angle).to(device)
-    optimiser = Adam(model.parameters(), lr=args.lr)
+                 num_angle=args.num_angle)
+
+    provenance: dict = {"init_encoder": None, "frozen_params": 0}
+    if args.init_encoder:
+        provenance = transfer_encoder(model, args.init_encoder, args.freeze_encoder)
+    elif args.freeze_encoder:
+        raise SystemExit("--freeze-encoder without --init-encoder would train the head against "
+                         "a random representation; that is not an experiment")
+    model.to(device)
+
+    # Only the parameters that still want gradients. Handing Adam frozen tensors is not merely
+    # wasteful: it keeps optimiser state for them and makes the "trainable parameters" line in
+    # any log a lie.
+    trainable = [q for q in model.parameters() if q.requires_grad]
+    optimiser = Adam(trainable, lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimiser, step_size=args.dec_step, gamma=args.lr_dec_rate)
 
     def run_epoch(graphs, training: bool):
-        model.train(training)
+        set_training_mode(model, training, frozen_encoder=args.freeze_encoder)
         order = torch.randperm(len(graphs)) if training else torch.arange(len(graphs))
         total, total_inter, n = 0.0, 0.0, 0
         preds, trues = [], []
@@ -166,31 +201,67 @@ def main() -> None:
             pearson = float("nan")
         return total / n, total_inter / n, rmse, pearson
 
-    best = float("inf")
+    # `--out` is a directory under the harness contract, but a .pt path is what every earlier
+    # invocation passed, so both are accepted and the three artefacts stay together either way.
+    out = Path(args.out)
+    if out.suffix == ".pt":
+        model_path, out_dir = out, out.parent
+    else:
+        model_path, out_dir = out / "model.pt", out
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    best, best_epoch = float("inf"), -1
+    history: list[dict] = []
     started = time.time()
     for epoch in range(1, args.epochs + 1):
         mae, mae_inter, rmse, pearson = run_epoch(train, training=True)
         line = (f"epoch {epoch:3d}  train MAE {mae:6.3f}  inter {mae_inter:6.3f}  "
                 f"RMSE {rmse:6.3f}  R {pearson:6.3f}")
+        # The first five keys are the harness's standard history columns; the rest are SIGN's
+        # own and are carried because losing the auxiliary term would hide half the objective.
+        row = {"epoch": epoch, "train_loss": mae, "train_r": pearson,
+               "val_loss": "", "val_r": "",
+               "train_rmse": rmse, "train_inter": mae_inter, "val_rmse": ""}
         if val:
             v_mae, _v_inter, v_rmse, v_pearson = run_epoch(val, training=False)
             line += f"  |  val MAE {v_mae:6.3f}  RMSE {v_rmse:6.3f}  R {v_pearson:6.3f}"
+            row.update(val_loss=v_mae, val_r=v_pearson, val_rmse=v_rmse)
             score_for_best = v_rmse
         else:
             score_for_best = rmse
+        history.append(row)
         print(line, flush=True)
 
         if score_for_best < best:
-            best = score_for_best
+            best, best_epoch = score_for_best, epoch
             torch.save({"model_state_dict": model.state_dict(),
                         "epoch": epoch, "score": best,
                         "infeat_dim": train[0].x.shape[1],
                         "hidden_dim": args.hidden_dim,
                         "num_convs": args.num_convs,
                         "dense_dims": list(dense_dims),
-                        "num_angle": args.num_angle}, args.out)
+                        "num_angle": args.num_angle}, model_path)
 
-    print(f"\nbest {best:.4f} -> {args.out}  ({time.time() - started:.0f}s)")
+    with (out_dir / "history.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(history[0]))
+        writer.writeheader()
+        writer.writerows(history)
+    (out_dir / "summary.json").write_text(json.dumps({
+        "model": "sign",
+        "epochs": len(history),
+        "best_epoch": best_epoch,
+        "best_score": best,
+        "selected_on": "val_rmse" if val else "train_rmse",
+        "train_graphs": len(train),
+        "val_graphs": len(val) if val else 0,
+        "seed": args.seed,
+        "freeze_encoder": args.freeze_encoder,
+        "seconds": round(time.time() - started, 1),
+        **provenance,
+    }, indent=2) + "\n")
+
+    print(f"\nbest {best:.4f} at epoch {best_epoch} -> {model_path}  "
+          f"({time.time() - started:.0f}s)")
 
 
 if __name__ == "__main__":

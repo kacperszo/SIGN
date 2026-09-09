@@ -67,12 +67,31 @@ They cannot all be right. Self-pairs are excluded here, which makes all three ag
 zero distance out of the angle calculation — where their own guard treats it as unusable and
 abandons the complex.
 
-## The embedding is native
+## The embedding is native, and the head is smaller than it looks
 
 `OutputLayer` pools before its MLP, so the graph vector exists in the model's own logic and
 nothing has to be invented — the same situation as IGN. It retains 98% of the head's Pearson R,
 the highest here, which is unsurprising for a pooling trained jointly with the head rather than
 recovered afterwards.
+
+**The head is `output_layer.output_layer`, not `output_layer`.** Read the forward:
+
+```python
+graph_feat = _scatter_sum(atom_feat, batch_index, num_graphs)   # 512, no parameters
+for layer in self.mlp: graph_feat = layer(graph_feat)           # 512 -> 256 -> 128
+return self.output_layer(graph_feat), graph_feat
+```
+
+The 128-dim vector `predict.py` writes as the embedding is produced by `output_layer.mlp`, and
+only the final `Linear(128, 1)` turns it into an affinity. The registry declared the whole
+module as the head until 2026-09-09, which would have left that MLP randomly initialised in
+every fine-tuned model — so `probe`'s R=0.711 measured a representation transfer never moved.
+Nothing raises on the wrong boundary: the split succeeds, training runs, the curve is worse.
+
+`pipool_layer` is a head too. It predicts the auxiliary interaction matrix, which is a training
+target rather than a representation, and a fine-tune relearns it in a few epochs.
+
+Split: **67 encoder tensors / 1,726,208 params (95%), 5 head tensors / 98,689**.
 
 ## Hard-won facts (do NOT regress these)
 
@@ -103,6 +122,54 @@ running: b2a's one-edge-per-bond shape; b2b never joining a bond to itself or it
 edges always sharing an atom; angle domains partitioning the edges exactly; the interaction
 matrix summing to one with absent types masked to zero; and the embedding being reproducible.
 
+`sign_torch/test_transfer.py` — nine tests on the encoder/head boundary, run at build time
+beside them. Same idea, different failure mode: everything here still trains and still prints a
+curve, just a worse one. The load-bearing case is **`test_embedding_survives_transfer`** — after
+transfer the new model must embed identically to the old one and score differently, because only
+the head was replaced. It fails on the pre-2026-09-09 boundary and passes on the corrected one,
+which is what makes that correction a measurement rather than an argument.
+
+## Training and fine-tuning through the harness
+
+`sign.torch` declares `train` and `finetune`. The adapter chains graph preparation and training
+in one container command, and `--cache` keeps the prepared graphs between runs — eight minutes
+a run otherwise, which every transfer experiment would pay again.
+
+```bash
+gnnb encoder split --variant sign.torch --out /tmp/sign_encoder.pt
+
+gnnb train --variant sign.torch --dataset data/pdbbind_v2019 \
+    --train-split benchmarks/pdbbind_train.csv --val-split benchmarks/pdbbind_val.csv \
+    --epochs 30 --workers 10 --cache ~/.cache/gnnb --gpu
+
+gnnb train --variant sign.torch --dataset data/pdbbind_v2019 \
+    --train-split benchmarks/pdbbind_train.csv --val-split benchmarks/pdbbind_val.csv \
+    --init-encoder /tmp/sign_encoder.pt --freeze-encoder --gpu
+
+gnnb run --variant sign.torch --capability predict --dataset data/CASF-2016/coreset \
+    --checkpoint runs/<stamp>_sign.torch_finetune/outputs/model.pt --gpu
+```
+
+**A frozen encoder is put in eval mode**, not just left with `requires_grad=False`.
+`Bond2BondLayer` and `Bond2AtomLayer` carry dropout, and leaving them training means the head
+learns against a representation resampled every step — a defensible regulariser, but a
+different experiment from the one `gnnb probe` measures. `transfer.py:set_training_mode` keeps
+the two comparable.
+
+**Checked end to end on 2026-09-09**, 400 train / 100 val complexes, 12 epochs on the 4060 Ti:
+
+| run | val R | seconds |
+|---|---|---|
+| from scratch | 0.495 | 58 |
+| fine-tune, encoder frozen | **0.681** | 25 |
+| fine-tune, all of it | 0.658 | 57 |
+
+Read that as plumbing, not as a transfer result: the encoder came from the checkpoint trained
+on all 4285 complexes, which includes these 400. What it does show is that refitting only the
+head, on a tenth of the data, recovers the full model — scoring the CASF core set with the
+frozen fine-tune gives **R 0.7247 against the published run's 0.7249**. A boundary that cut
+through the encoder could not do that.
+
 ## Build & run
 
 ```bash
@@ -114,11 +181,12 @@ podman run --rm --network=none --shm-size=4g \
   localhost/sign-gpu:latest sh -c "cd /work && TMPDIR=/tmp python -m sign_torch.prepare \
     --complexes /data --out /outputs/train.pt --labels /labels/pdbbind_train.csv --workers 10"
 
-# train
+# train — `--out` is a directory now: model.pt, history.csv and summary.json go in it.
+# A path ending in .pt is still accepted and the other two land beside it.
 podman run --rm --network=none --shm-size=4g --device nvidia.com/gpu=all \
   -v <out>:/outputs:rw,U localhost/sign-gpu:latest \
   sh -c "cd /work && python -m sign_torch.train --graphs /outputs/train.pt \
-    --val_graphs /outputs/val.pt --out /outputs/sign_model.pt --epochs 30"
+    --val_graphs /outputs/val.pt --out /outputs --epochs 30"
 ```
 
 `Containerfile.torch` is the CPU variant, for tests only — one epoch over 4285 complexes does
@@ -157,3 +225,7 @@ Two things had to be fixed to get there, and both were latent rather than introd
 2. Two hyperparameters were left at the authors' defaults but never swept: `lambda_` 1.75 on the
    auxiliary loss, and `dec_step` 8000. Neither was tuned for our split size.
 3. The `DomainAttentionLayer` self-concatenation, as an ablation.
+4. A transfer result that means something needs an encoder trained on data the fine-tuning
+   split does not contain. SIGN's own checkpoint saw all 4285 complexes, so it can only
+   demonstrate the mechanism — the first real measurement wants an encoder from a different
+   task, which is what the pretraining programme is for.

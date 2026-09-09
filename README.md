@@ -12,7 +12,7 @@ model measured — and a 128-dimensional native embedding that retains 98% of it
 
 | variant | capabilities | `gnnb verify` on CASF-2016 |
 |---|---|---|
-| `sign.torch` | predict, embed | 285/285, max abs diff 8.9e-16 |
+| `sign.torch` | predict, embed, train, finetune | 285/285, max abs diff 8.9e-16 |
 
 The golden is this checkpoint's own recorded output. SIGN publishes no weights, so there is
 nothing external to be faithful to and `verify` is a regression check on the port and its
@@ -26,6 +26,26 @@ gnnb verify --variant sign.torch --dataset data/CASF-2016/coreset
 gnnb run --variant sign.torch --capability predict --dataset <complexes> --gpu
 gnnb run --variant sign.torch --capability embed   --dataset <complexes>
 ```
+
+It is also the first model wired to the training contract, so it is the worked example for the
+rest:
+
+```bash
+gnnb encoder split --variant sign.torch --out /tmp/sign_encoder.pt
+
+gnnb train --variant sign.torch --dataset data/pdbbind_v2019 \
+    --train-split benchmarks/pdbbind_train.csv --val-split benchmarks/pdbbind_val.csv \
+    --epochs 30 --workers 10 --cache ~/.cache/gnnb --gpu
+
+gnnb train --variant sign.torch --dataset data/pdbbind_v2019 \
+    --train-split benchmarks/pdbbind_train.csv --val-split benchmarks/pdbbind_val.csv \
+    --init-encoder /tmp/sign_encoder.pt --freeze-encoder --gpu
+```
+
+The head is `output_layer.output_layer` and `pipool_layer` — **not** the whole `output_layer`
+module, which produces the 128-dim embedding one line before the affinity Linear reads it.
+`sign_torch/test_transfer.py` pins that: after transfer the model must embed identically and
+score differently.
 
 **The trained checkpoint is not in git** — `.gitignore` excludes `*.pt` deliberately, and the
 registry bind-mounts it from the working tree. A fresh clone has to train it or be handed the
