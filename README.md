@@ -57,6 +57,100 @@ no other repository here publishes a training list, so SIGN is being judged more
 everything beside it — report its numbers with that attached. Full commands and the caveat in
 [CLAUDE.md](CLAUDE.md).
 
+## Running it without the harness
+
+This fork runs on its own; the benchmark adds bookkeeping, not capability. Every
+command below is generated from the adapter by `gnnb howto`, so it cannot drift from
+what the harness actually runs — regenerate with `python tools/sync_model_readmes.py`.
+
+All of them run with `--network=none` and a read-only root filesystem. Nothing is
+fetched at run time; dependencies are resolved when the image is built.
+
+### What it eats
+
+One directory per complex, named after it:
+
+    <complexes>/<id>/<id>_protein.pdb
+    <complexes>/<id>/<id>_ligand.sdf      # or .mol2; several models try both
+
+Needs `<id>_pocket.pdb` and `<id>_ligand.mol2`. **Nothing ships `<id>_pocket.mol2`** — zero of 285 CASF-2016 complexes and zero of PDBbind v2019 — so `prepare.py` converts the pdb with Open Babel on the way in.
+
+### Build
+
+```bash
+podman build --format=docker -f Containerfile.torch -t sign:latest .     # cpu, tests only
+podman build --format=docker -f Containerfile.gpu   -t sign-gpu:latest . # what training needs
+```
+
+### Run
+
+```bash
+# sign.torch — localhost/sign:latest
+# source: models/sign
+
+# predict
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v "$PWD:/ckpt:ro" \
+    localhost/sign:latest \
+    sh -c 'cd /work && TMPDIR=/tmp python -m sign_torch.predict --complexes /data --model /ckpt/checkpoint_trained.pt --out /outputs --device cpu'
+
+# embed
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v "$PWD:/ckpt:ro" \
+    localhost/sign:latest \
+    sh -c 'cd /work && TMPDIR=/tmp python -m sign_torch.predict --complexes /data --model /ckpt/checkpoint_trained.pt --out /outputs --device cpu'
+
+# train
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v "$PWD:/ckpt:ro" \
+    -v /path/to/splits:/splits:ro \
+    -v /path/to/cache:/cache:rw,U \
+    --shm-size 4g \
+    localhost/sign:latest \
+    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6.pt ]; then echo reusing /cache/sign_train_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6.pt ]; then echo reusing /cache/sign_val_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6.pt --epochs 30 --device cpu'
+
+# finetune  (encoder frozen; drop --freeze-encoder to tune all of it)
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v "$PWD:/ckpt:ro" \
+    -v /path/to/splits:/splits:ro \
+    -v /path/to/cache:/cache:rw,U \
+    --shm-size 4g \
+    localhost/sign:latest \
+    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6.pt ]; then echo reusing /cache/sign_train_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6.pt ]; then echo reusing /cache/sign_val_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6.pt --epochs 30 --init-encoder /ckpt/encoder.pt --freeze-encoder --device cpu'
+```
+
+### What comes out
+
+| file | holds |
+|---|---|
+| `predictions.csv` | `complex_id,y_pred` |
+| `embeddings.npz` | `ids` and `vectors`, 128-dim, native — `forward` returns it |
+| `model.pt` | training only; reloads under `weights_only=True` |
+| `history.csv` | training only; `epoch,train_loss,train_r,val_loss,val_r` and SIGN's own columns |
+| `summary.json` | training only; best epoch, and what the run started from |
+
+### Before you trust the numbers
+
+**No checkpoint ships with this fork.** `.gitignore` excludes `*.pt` on purpose, so a fresh clone has to train one — which is the honest position, because the authors publish no weights either. That is also why this is the only model here whose training data is known: the split is ours and it excludes the CASF-2016 core set explicitly.
+
+The pocket conversion is worth suspicion rather than comfort: pdb to mol2 assigns bond orders by perception, and Open Babel warns *\"Failed to kekulize aromatic bonds\"* while doing it. First place to look if a retrained model underperforms for no other visible reason.
+
 <!-- gnn-benchmark:end -->
 
 ---

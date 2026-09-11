@@ -21,7 +21,7 @@ RUN micromamba install -y -n base -c conda-forge \
 ENV PATH=/opt/conda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/opt/conda/lib
 
-RUN pip install --no-cache-dir torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
 # torch_geometric only; no torch_scatter. The port uses torch's own scatter_add_ and takes
 # just `softmax` from PyG, and modern PyG no longer needs the compiled extensions — which
 # also removes the one dependency here that builds from source when its wheel index is
