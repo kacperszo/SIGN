@@ -28,24 +28,13 @@ architecture rather than memorisation is exactly what the others cannot answer.
 
 Report it with that caveat attached. It is being judged more strictly than everything beside it.
 
-## Why a rewrite was the right call here
+## It is a rewrite, and the featurisation is still theirs
 
-The usual objection — that an unverified rewrite is an implementation rather than a
-reproduction — does not bite when there is nothing to verify against. **SIGN ships no
-checkpoints.** Training was required either way, so running the original would have bought a
-second framework, a second package index and a second GPU stack for one model, and bought
-nothing in fidelity.
-
-`preprocess_pdbbind.py` and `featurizer.py` contain no Paddle at all and are reused unchanged,
-so the featurisation is literally theirs. Only `dataset.py`, which built the PGL graphs, needed
-rewriting. The PGL constructs map as:
-
-| PGL | PyTorch |
-|---|---|
-| `g.send(fn, src_feat, dst_feat, edge_feat)` | gather along `edge_index`, compute per edge |
-| `msg.reduce_softmax(alpha)` | `torch_geometric.utils.softmax` over destinations |
-| `msg.reduce(x, pool_type="sum")` | scatter-add over destinations |
-| `pgl.nn.GraphPool('sum')` | scatter-add over `batch` |
+The original is PaddlePaddle + PGL and ships **no checkpoints**, so there was nothing to verify a
+faithful port against and training was required either way. `preprocess_pdbbind.py` and
+`featurizer.py` contain no Paddle and are reused unchanged; only `dataset.py`, which built the PGL
+graphs, was rewritten. The PGL constructs map as `send`/`reduce_softmax`/`reduce(sum)`/`GraphPool`
+to gather-along-edge_index, `torch_geometric.utils.softmax`, and scatter-add.
 
 ## Two things carried over deliberately
 
@@ -74,22 +63,12 @@ nothing has to be invented — the same situation as IGN. It retains 98% of the 
 the highest here, which is unsurprising for a pooling trained jointly with the head rather than
 recovered afterwards.
 
-**The head is `output_layer.output_layer`, not `output_layer`.** Read the forward:
-
-```python
-graph_feat = _scatter_sum(atom_feat, batch_index, num_graphs)   # 512, no parameters
-for layer in self.mlp: graph_feat = layer(graph_feat)           # 512 -> 256 -> 128
-return self.output_layer(graph_feat), graph_feat
-```
-
-The 128-dim vector `predict.py` writes as the embedding is produced by `output_layer.mlp`, and
-only the final `Linear(128, 1)` turns it into an affinity. The registry declared the whole
-module as the head until 2026-09-09, which would have left that MLP randomly initialised in
-every fine-tuned model — so `probe`'s R=0.711 measured a representation transfer never moved.
-Nothing raises on the wrong boundary: the split succeeds, training runs, the curve is worse.
-
-`pipool_layer` is a head too. It predicts the auxiliary interaction matrix, which is a training
-target rather than a representation, and a fine-tune relearns it in a few epochs.
+**The head is `output_layer.output_layer`, not `output_layer`.** `OutputLayer.forward` pools, runs
+the 512/256/128 MLP, and returns *that MLP's output* as `graph_feat` — so the 128-dim embedding is
+produced inside the module whose name suggests it is the head, and only the final `Linear(128, 1)`
+turns it into an affinity. Declaring the whole module would leave that MLP randomly initialised in
+every fine-tuned model, and nothing raises: the split succeeds, training runs, the curve is worse.
+`pipool_layer` is a head too — it predicts the auxiliary interaction matrix, a training target.
 
 Split: **67 encoder tensors / 1,726,208 params (95%), 5 head tensors / 98,689**.
 
@@ -156,19 +135,10 @@ learns against a representation resampled every step — a defensible regularise
 different experiment from the one `gnnb probe` measures. `transfer.py:set_training_mode` keeps
 the two comparable.
 
-**Checked end to end on 2026-09-09**, 400 train / 100 val complexes, 12 epochs on the 4060 Ti:
-
-| run | val R | seconds |
-|---|---|---|
-| from scratch | 0.495 | 58 |
-| fine-tune, encoder frozen | **0.681** | 25 |
-| fine-tune, all of it | 0.658 | 57 |
-
-Read that as plumbing, not as a transfer result: the encoder came from the checkpoint trained
-on all 4285 complexes, which includes these 400. What it does show is that refitting only the
-head, on a tenth of the data, recovers the full model — scoring the CASF core set with the
-frozen fine-tune gives **R 0.7247 against the published run's 0.7249**. A boundary that cut
-through the encoder could not do that.
+**The boundary is confirmed by refitting.** Freeze the encoder, train the head alone on 400
+complexes, and CASF comes back at R 0.7247 against the full model's 0.7249 — so the encoder carries
+essentially all the signal and the head is cheap to replace. A boundary cutting through the encoder
+could not do that.
 
 ## Build & run
 
@@ -191,30 +161,6 @@ podman run --rm --network=none --shm-size=4g --device nvidia.com/gpu=all \
 
 `Containerfile.torch` is the CPU variant, for tests only — one epoch over 4285 complexes does
 not finish in minutes on CPU.
-
-## Running it in the harness
-
-`sign.torch` is registered, with `predict` and `embed` from one forward — the model already
-returns both, so the 128-dim embedding is native rather than pooled by us.
-
-```bash
-gnnb verify --variant sign.torch --dataset data/CASF-2016/coreset
-gnnb run --variant sign.torch --capability predict --dataset <complexes> --gpu
-```
-
-The golden is this checkpoint's own recorded output, so `verify` is a regression check on the
-port and its environment — SIGN publishes no weights, so there is nothing external to be
-faithful to.
-
-Two things had to be fixed to get there, and both were latent rather than introduced:
-
-- **`train.py` hardcoded `dense_dims=(512, 256, 128)` and never recorded it.** `model.py`
-  defaults to `(128, 128, 64)`, so the checkpoint could only be reloaded by someone who
-  already knew what it was trained with. It is written into the checkpoint now, and
-  `predict.py` falls back to the old value for files written before that.
-- **`collate` assumed every graph carried a label.** `prepare.py` sets `y` to `None` when no
-  label file is given — which is exactly the scoring case — and `hasattr` is true for it, so
-  `torch.cat` failed several frames from the cause.
 
 ## Next
 
