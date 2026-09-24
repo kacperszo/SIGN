@@ -130,6 +130,14 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_", type=float, default=1.75)
     parser.add_argument("--dec_step", type=int, default=8000)
+    parser.add_argument("--state", default=None,
+                        help="training-state file, rewritten after every epoch. If it exists at "
+                             "start, training resumes from it — model, optimiser, learning-rate "
+                             "schedule, epoch count, best model, history and RNG state. Put it "
+                             "under /cache so it outlives the run directory")
+    parser.add_argument("--max-minutes", dest="max_minutes", type=float, default=None,
+                        help="stop cleanly at the first epoch boundary after this many minutes "
+                             "of this invocation, leaving --state ready to resume")
     parser.add_argument("--lr_dec_rate", type=float, default=0.5)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_convs", type=int, default=2)
@@ -232,9 +240,35 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     best, best_epoch = float("inf"), -1
+    best_state = None
     history: list[dict] = []
     started = time.time()
-    for epoch in range(1, args.epochs + 1):
+    first_epoch, earlier_seconds, resumed_from = 1, 0.0, None
+
+    # **Resuming.** A long schedule does not have to fit in one sitting: the whole training
+    # state is written after every epoch and read back here. Saved and loaded with plain
+    # torch.save / weights_only=True — tensors, numbers, strings and lists of them, nothing that
+    # needs unpickling code. Numpy's RNG is not in it because nothing here draws from numpy:
+    # batch order is torch.randperm and dropout is torch's own.
+    if args.state and Path(args.state).exists():
+        state = torch.load(args.state, map_location=device, weights_only=True)
+        model.load_state_dict(state["model"])
+        optimiser.load_state_dict(state["optimiser"])
+        scheduler.load_state_dict(state["scheduler"])
+        torch.set_rng_state(state["rng_cpu"].cpu())
+        if torch.cuda.is_available() and state.get("rng_cuda"):
+            torch.cuda.set_rng_state_all([t.cpu() for t in state["rng_cuda"]])
+        first_epoch = int(state["epoch"]) + 1
+        best, best_epoch = float(state["best"]), int(state["best_epoch"])
+        best_state = state["best_model"]
+        history = list(state["history"])
+        earlier_seconds = float(state["seconds"])
+        resumed_from = args.state
+        print(f"resumed from {args.state} after epoch {first_epoch - 1} "
+              f"(best {best:.4f} at epoch {best_epoch})", flush=True)
+
+    stopped_for_time = False
+    for epoch in range(first_epoch, args.epochs + 1):
         mae, mae_inter, rmse, pearson = run_epoch(train, training=True)
         line = (f"epoch {epoch:3d}  train MAE {mae:6.3f}  inter {mae_inter:6.3f}  "
                 f"RMSE {rmse:6.3f}  R {pearson:6.3f}")
@@ -255,6 +289,7 @@ def main() -> None:
 
         if score_for_best < best:
             best, best_epoch = score_for_best, epoch
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             torch.save({"model_state_dict": model.state_dict(),
                         "epoch": epoch, "score": best,
                         "infeat_dim": train[0].x.shape[1],
@@ -262,6 +297,40 @@ def main() -> None:
                         "num_convs": args.num_convs,
                         "dense_dims": list(dense_dims),
                         "num_angle": args.num_angle}, model_path)
+
+        if args.state:
+            # Written to a sibling and renamed, so an interruption mid-write leaves the
+            # previous epoch's state intact rather than a truncated file.
+            tmp = Path(args.state).with_suffix(".tmp")
+            torch.save({
+                "model": model.state_dict(), "optimiser": optimiser.state_dict(),
+                "scheduler": scheduler.state_dict(), "epoch": epoch,
+                "best": best, "best_epoch": best_epoch, "best_model": best_state,
+                "history": history,
+                "seconds": earlier_seconds + (time.time() - started),
+                "rng_cpu": torch.get_rng_state(),
+                "rng_cuda": (torch.cuda.get_rng_state_all()
+                             if torch.cuda.is_available() else []),
+            }, tmp)
+            tmp.replace(args.state)
+
+        if args.max_minutes is not None and time.time() - started >= args.max_minutes * 60:
+            stopped_for_time = epoch < args.epochs
+            if stopped_for_time:
+                print(f"time budget of {args.max_minutes:g} min reached after epoch {epoch}; "
+                      f"resume with the same --state", flush=True)
+            break
+
+    # model.pt is the best model so far, written here as well as on each improvement: a run that
+    # resumed and never improved would otherwise leave its own run directory without one.
+    if best_state is not None:
+        torch.save({"model_state_dict": best_state,
+                    "epoch": best_epoch, "score": best,
+                    "infeat_dim": train[0].x.shape[1],
+                    "hidden_dim": args.hidden_dim,
+                    "num_convs": args.num_convs,
+                    "dense_dims": list(dense_dims),
+                    "num_angle": args.num_angle}, model_path)
 
     with (out_dir / "history.csv").open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(history[0]))
@@ -277,7 +346,12 @@ def main() -> None:
         "val_graphs": len(val) if val else 0,
         "seed": args.seed,
         "freeze_encoder": args.freeze_encoder,
-        "seconds": round(time.time() - started, 1),
+        "seconds": round(earlier_seconds + time.time() - started, 1),
+        "epochs_requested": args.epochs,
+        # False means the schedule is unfinished: resume with the same --state.
+        "complete": not stopped_for_time,
+        "resumed_from": resumed_from,
+        "state": args.state,
         **provenance,
     }, indent=2) + "\n")
 
