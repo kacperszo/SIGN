@@ -14,11 +14,11 @@ Done. Ported, trained and evaluated.
 
 | | |
 |---|---|
-| CASF-2016 scoring | **R 0.725**, RMSE 1.511, c-index 0.764, n=285 |
-| CASF-2016 ranking | **rho 0.653** — best of every model measured; baseline 0.619 |
+| CASF-2016 scoring | **R 0.759**, RMSE 1.420, c-index 0.775, n=285 — paper 0.797 ± 0.012 |
+| CASF-2016 ranking | rho 0.596; the previous checkpoint gave 0.653; baseline 0.619 |
 | top-1 | 0.561 |
-| embedding | 128d, **native**, probe R 0.711, retains **98%** of its own head |
-| training | 4285 complexes, 30 epochs, 23 min on an RTX 4060 Ti |
+| embedding | 128d, **native**, probe R 0.756, retains **99.6%** of its own head |
+| training | 4285 complexes, **300 epochs** as the authors train, 4 h on an RTX 4060 Ti; best on validation at epoch 163 |
 
 **It is the only model in the benchmark whose training data we know.** The split excludes the
 CASF-2016 core set explicitly, and that matters: 266 of the 285 core-set complexes sit inside

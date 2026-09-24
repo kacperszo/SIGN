@@ -21,11 +21,11 @@ is theirs even though the graphs are not.
 
 | | |
 |---|---|
-| CASF-2016 scoring | **R 0.725**, RMSE 1.511, n=285 |
-| CASF-2016 ranking | **rho 0.653** — best measured here; size baseline 0.619 |
-| embedding | 128d, **native**, probe R 0.711, retains 98% of its own head |
+| CASF-2016 scoring | **R 0.759**, RMSE 1.420, n=285 — paper 0.797 ± 0.012 |
+| CASF-2016 ranking | rho 0.596; the previous checkpoint gave 0.653; size baseline 0.619 |
+| embedding | 128d, **native**, probe R 0.756, retains 99.6% of its own head |
 | `gnnb verify` | 285/285, 8.9e-16 |
-| training | 4285 complexes, 30 epochs, 23 min on an RTX 4060 Ti |
+| training | 4285 complexes, **300 epochs** as the authors train, 4 h on an RTX 4060 Ti; best on validation at epoch 163 |
 
 **The only model here whose training data is known**, and its split excludes the CASF-2016 core set
 explicitly. No checkpoint ships with this fork — `*.pt` is gitignored deliberately, because the
