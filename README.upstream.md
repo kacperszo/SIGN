@@ -1,8 +1,12 @@
 # sign — the authors' original README
 
-Kept for attribution and for the authors' own description of the method. **Its
-instructions are not current for this fork** — see [README.md](README.md) for how to
-build and run what is actually here.
+Reproduced verbatim from `README.md` at upstream commit `72fe54a116`, the newest commit in
+this history that we did not author. Kept for attribution and for the authors' own
+description of the method. **Its instructions are not current for this fork** — see
+[README.md](README.md) for how to build and run what is actually here.
+
+Verbatim is checked, not claimed: `tools/check_upstream_readmes.py` compares the body
+below against that commit byte for byte.
 
 ---
 
@@ -41,48 +45,6 @@ To train the model, you can run this command:
 ```
 python train.py --cuda YOUR_DEVICE --model_dir MODEL_PATH_TO_SAVE --dataset pdbbind2016 --cut_dist 5 --num_angle 6
 ```
-### Container (Podman/Docker)
-
-The repo includes a `Containerfile` that packages the full environment — Python 3.9, openbabel 3.1.1 (via conda-forge), paddlepaddle-gpu 2.5.2 (CUDA 11.8), and PGL — into a single reproducible image using rootless Podman.
-
-**Build:**
-```bash
-podman build -t sign .
-```
-
-If your GPU's CUDA version differs from 11.8, edit the `cu118` index URL in `Containerfile` before building (check your version with `nvidia-smi`). Supported suffixes: `cu117`, `cu118`, `cu120`.
-
-**One-time host setup for GPU passthrough** (only needed once per machine):
-```bash
-nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-```
-
-**Run an interactive session:**
-```bash
-mkdir -p outputs
-
-podman run --rm -it \
-  --device nvidia.com/gpu=all \
-  --security-opt=label=disable \
-  --network=none \
-  -v "$(pwd)/outputs:/work/outputs" \
-  sign bash
-```
-
-Inside the container, train as usual:
-```bash
-python train.py --cuda 0 --model_dir /work/outputs --dataset pdbbind2016 --cut_dist 5 --num_angle 6
-```
-
-Saved checkpoints will appear in `./outputs/` on the host.
-
-**How the image is structured:**
-- Base: `nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04` for CUDA support
-- `micromamba` installs `openbabel` from conda-forge (no pip wheel exists for it)
-- `paddlepaddle-gpu` and `pgl` are installed via pip from PaddlePaddle's package index
-- All source code and preprocessed data are baked into the image at `/work`
-- `--network=none` at runtime prevents outbound connections (pickle-loaded weights are a supply-chain risk)
-
 ### Citation
 If you find our work is helpful in your research, please consider citing our paper:
 ```bibtex
