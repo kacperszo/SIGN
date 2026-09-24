@@ -86,7 +86,7 @@ podman run --rm \
     -v /path/to/cache:/cache:rw,U \
     --shm-size 4g \
     localhost/sign:latest \
-    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6.pt ]; then echo reusing /cache/sign_train_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6.pt ]; then echo reusing /cache/sign_val_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6.pt --epochs 30 --device cpu'
+    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6_t12.pt ]; then echo reusing /cache/sign_train_cut5_ang6_t12.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6_t12.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6_t12.pt ]; then echo reusing /cache/sign_val_cut5_ang6_t12.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6_t12.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6_t12.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6_t12.pt --epochs 30 --device cpu'
 
 # finetune  (encoder frozen; drop --freeze-encoder to tune all of it)
 podman run --rm \
@@ -99,7 +99,7 @@ podman run --rm \
     -v /path/to/cache:/cache:rw,U \
     --shm-size 4g \
     localhost/sign:latest \
-    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6.pt ]; then echo reusing /cache/sign_train_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6.pt ]; then echo reusing /cache/sign_val_cut5_ang6.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6.pt --epochs 30 --init-encoder /ckpt/encoder.pt --freeze-encoder --device cpu'
+    sh -c 'cd /work && if [ -f /cache/sign_train_cut5_ang6_t12.pt ]; then echo reusing /cache/sign_train_cut5_ang6_t12.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/train.csv --out /cache/sign_train_cut5_ang6_t12.pt --cut_dist 5 --num_angle 6; fi && if [ -f /cache/sign_val_cut5_ang6_t12.pt ]; then echo reusing /cache/sign_val_cut5_ang6_t12.pt; else TMPDIR=/tmp python -m sign_torch.prepare --complexes /data --labels /splits/val.csv --out /cache/sign_val_cut5_ang6_t12.pt --cut_dist 5 --num_angle 6; fi && python -m sign_torch.train --graphs /cache/sign_train_cut5_ang6_t12.pt --out /outputs --seed 0 --val_graphs /cache/sign_val_cut5_ang6_t12.pt --epochs 30 --init-encoder /ckpt/encoder.pt --freeze-encoder --device cpu'
 ```
 
 ## What comes out

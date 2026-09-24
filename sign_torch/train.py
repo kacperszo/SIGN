@@ -48,7 +48,7 @@ def collate(graphs: list) -> object:
     x, batch_idx = [], []
     a2a, dist, b2a = [], [], []
     b2b = [[] for _ in range(len(graphs[0].b2b_edge_index_list))]
-    bond_types, type_counts, ys = [], [], []
+    bond_types, type_counts, type_pairs, ys = [], [], [], []
     atom_offset = bond_offset = 0
 
     for i, g in enumerate(graphs):
@@ -62,6 +62,7 @@ def collate(graphs: list) -> object:
             b2b[k].append(e + bond_offset)
         bond_types.append(g.bond_types)
         type_counts.append(g.type_count.reshape(-1, 1))
+        type_pairs.append(getattr(g, "type_pair", None))
         # `hasattr` is not enough: prepare.py sets `y` to None when no label file was given,
         # so an unlabelled graph has the attribute and it holds nothing. Scoring new
         # complexes is exactly that case, and torch.cat on a None fails several frames away
@@ -79,16 +80,32 @@ def collate(graphs: list) -> object:
         b2b_edge_index_list=[torch.cat(e, dim=1) for e in b2b],
         bond_types=torch.cat(bond_types),
         type_count=torch.cat(type_counts, dim=1),
+        # (B, 36), or None when any graph lacks it — scoring does not need it, training does
+        type_pair=(torch.stack([t.reshape(-1) for t in type_pairs])
+                   if all(t is not None for t in type_pairs) else None),
         y=torch.cat(ys) if all(v is not None for v in ys) else None,
         num_graphs=len(graphs),
     )
 
 
-def interaction_target(type_count: torch.Tensor) -> torch.Tensor:
-    """The auxiliary label: the observed bond-type distribution per complex."""
-    counts = type_count.t().float()
-    total = counts.sum(dim=1, keepdim=True).clamp(min=1.0)
-    return counts / total
+def interaction_target(batch) -> torch.Tensor:
+    """The auxiliary label, as the authors define it: (B, 36), each row summing to one.
+
+    The counts are `prepare.authors_interaction_counts` — pairs within 12 A over the whole
+    protein — normalised exactly as their dataset.py:91 does, `inter_feats / inter_feats.sum()`.
+
+    This used to be built from `type_count`, the 36 types counted over the graph's 5 A edges.
+    That is a different distribution and was never the authors' target; see the docstring of
+    `authors_interaction_counts`. A cache prepared before the fix carries no `type_pair` and
+    is refused rather than silently falling back.
+    """
+    if batch.type_pair is None:
+        raise SystemExit(
+            "these graphs carry no `type_pair`, the authors' 12 A interaction target. They were "
+            "prepared before 2026-09-24, when the port trained against a 5 A substitute. "
+            "Delete the cached graph file and prepare again.")
+    counts = batch.type_pair.float()
+    return counts / counts.sum(dim=1, keepdim=True).clamp(min=1.0)
 
 
 def main() -> None:
@@ -106,7 +123,9 @@ def main() -> None:
     parser.add_argument("--freeze-encoder", dest="freeze_encoder", action="store_true",
                         help="train the heads only, with the encoder in eval mode so its "
                              "dropout does not resample the representation each step")
-    parser.add_argument("--epochs", type=int, default=50)
+    # The authors' train.py default. This was 50 until 2026-09-24, and the checkpoint behind
+    # every SIGN number so far was trained for 30 — a tenth of the schedule the paper used.
+    parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_", type=float, default=1.75)
@@ -172,9 +191,11 @@ def main() -> None:
                 setattr(batch, field, getattr(batch, field).to(device, non_blocking=True))
             batch.b2b_edge_index_list = [e.to(device, non_blocking=True)
                                          for e in batch.b2b_edge_index_list]
+            if batch.type_pair is not None:
+                batch.type_pair = batch.type_pair.to(device, non_blocking=True)
             with torch.set_grad_enabled(training):
                 inter_hat, score, _feat = model(batch)
-                target = interaction_target(batch.type_count)
+                target = interaction_target(batch)
                 loss = F.l1_loss(score.squeeze(-1), batch.y, reduction="sum")
                 loss_inter = F.l1_loss(inter_hat, target, reduction="sum")
                 objective = loss + args.lambda_ * loss_inter

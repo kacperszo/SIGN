@@ -35,6 +35,7 @@ import sys
 import shutil
 import tempfile
 
+import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -43,6 +44,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from openbabel import pybel  # noqa: E402
 
 from featurizer import Featurizer  # noqa: E402
+from scipy.spatial import distance_matrix  # noqa: E402
+
+from preprocess_pdbbind import dist_filter  # noqa: E402
 from preprocess_pdbbind import (cons_lig_pock_graph_with_spatial_context,  # noqa: E402
                                 gen_feature)
 
@@ -78,6 +82,53 @@ def stage(complex_dir: str, cid: str, scratch: str) -> str:
     return target
 
 
+#: preprocess_pdbbind.py:298-299 — the authors' atom types for the auxiliary target. Ordered
+#: pocket-major, the same order as PAIR_IDS and as `pair_ids` in their dataset.py, which is
+#: the order PiPoolLayer's 36 outputs come in.
+TARGET_LIGAND_TYPES = [6, 7, 8, 9, 15, 16, 17, 35, 53]
+TARGET_POCKET_TYPES = [6, 7, 8, 16]
+#: preprocess_pdbbind.py:134 — `dist_filter(dm, 12)`. Not the graph's 5 A cutoff.
+TARGET_CUTOFF = 12
+
+
+def authors_interaction_counts(complex_dir: str, cid: str):
+    """The auxiliary training target, as the authors compute it. None if it cannot be.
+
+    This is `preprocess_pdbbind.pairwise_atomic_types` for one complex, line for line: every
+    ligand atom against every atom of the **whole protein**, pairs within **12 A**, counted by
+    (pocket element, ligand element) over 4 x 9 = 36 types. Their function walks an entire
+    directory, so its body is repeated here rather than called; `dist_filter` is imported from
+    their module unchanged.
+
+    **Until 2026-09-24 the port did not compute this at all.** It trained `PiPoolLayer`
+    against the normalised `type_count` instead — the same 36 types, but counted over the
+    graph's own inter-molecular edges, which stop at the 5 A graph cutoff and cover the pocket
+    only. That is a different distribution, the loss on it carries weight lambda = 1.75, and
+    nothing recorded the substitution. Water oxygens within 12 A count as pocket O, because
+    theirs do.
+    """
+    ligand_path = os.path.join(complex_dir, f"{cid}_ligand.mol2")
+    protein_path = os.path.join(complex_dir, f"{cid}_protein.pdb")
+    if not (os.path.exists(ligand_path) and os.path.exists(protein_path)):
+        return None
+    ligand = next(pybel.readfile("mol2", ligand_path))
+    pocket = next(pybel.readfile("pdb", protein_path))
+    coords_lig = np.vstack([atom.coords for atom in ligand])
+    coords_poc = np.vstack([atom.coords for atom in pocket])
+    atom_map_lig = [atom.atomicnum for atom in ligand]
+    atom_map_poc = [atom.atomicnum for atom in pocket]
+    ligs, pocks = dist_filter(distance_matrix(coords_lig, coords_poc), TARGET_CUTOFF)
+
+    keys = [(i, j) for i in TARGET_POCKET_TYPES for j in TARGET_LIGAND_TYPES]
+    counts = {k: 0 for k in keys}
+    for x, y in zip(ligs, pocks):
+        x, y = atom_map_lig[x], atom_map_poc[y]
+        if x not in TARGET_LIGAND_TYPES or y not in TARGET_POCKET_TYPES:
+            continue
+        counts[(y, x)] += 1
+    return np.array(list(counts.values()), dtype=np.int64)
+
+
 def _build_one(job):
     """One complex, in its own scratch directory. Returns (id, data, error)."""
     cid, complex_dir, label, cut_dist, num_angle = job
@@ -99,6 +150,13 @@ def _build_one(job):
         if data is None:
             raise ValueError("degenerate geometry; the original abandons these too")
         data.complex_id = cid
+        # Best effort: scoring needs none of this, and a complex with no full protein file
+        # (an MD frame, say) must still be scorable. Training refuses graphs without it.
+        try:
+            counts = authors_interaction_counts(complex_dir, cid)
+        except Exception:
+            counts = None
+        data.type_pair = None if counts is None else torch.as_tensor(counts, dtype=torch.long)
         return cid, data, None
     except Exception as e:
         return cid, None, f"{type(e).__name__}: {e}"
