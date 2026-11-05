@@ -1,0 +1,11 @@
+SIGN — Structure-aware Interactive Graph Neural Network
+
+The files at the repository root (model.py, layers.py, main.py, utils.py,
+dataset.py, config.py, metrics.py) are the authors' and carry their own headers:
+
+    Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved
+
+They are unmodified from upstream agave233/SIGN at commit 72fe54a116.
+
+Everything under sign_torch/ is a reimplementation added in this fork and is
+released under the same Apache License, Version 2.0.
