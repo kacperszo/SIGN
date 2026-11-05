@@ -1,5 +1,5 @@
 # SIGN on PyTorch, GPU tier. Same rewrite as Containerfile.torch, built against CUDA 12.1,
-# which covers sm_86 on the cluster and sm_89 locally. Training on CPU is not viable: a
+# which covers sm_86 and sm_89. Training on CPU is not viable: a
 # single epoch over 4285 complexes did not finish in two and a half minutes.
 #
 # The model has no published weights, so nothing here can be checked against reference
@@ -40,6 +40,7 @@ RUN python -c "import torch, torch_geometric, numpy, scipy; \
 from openbabel import pybel; print('env ok', torch.__version__)"
 
 WORKDIR /work
+# *.pt (trained weights) is gitignored and excluded by .containerignore; mount weights at run time.
 COPY . /work
 
 # the property tests are the only check this model has, so they run at build time.

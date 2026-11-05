@@ -13,8 +13,8 @@ from, it is not the one on pdbbind.org, so the conversion has to happen here. op
 it, and openbabel is already required for reading the ligand.
 
 That conversion is a place to be suspicious rather than comfortable: pdb -> mol2 assigns bond
-orders and atom types by perception, and this benchmark has already been bitten twice by a
-chemistry toolkit quietly changing what it perceives. Worth revisiting if the trained model
+orders and atom types by perception, and a chemistry toolkit quietly changing what it
+perceives has bitten this pipeline twice. Worth revisiting if the trained model
 underperforms for no other visible reason.
 
 **Parallel workers need shared memory.** They return built `Data` objects, and torch passes

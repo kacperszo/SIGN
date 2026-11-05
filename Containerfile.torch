@@ -38,6 +38,7 @@ RUN python -c "import torch, torch_geometric, numpy, scipy; \
 from openbabel import pybel; print('env ok', torch.__version__)"
 
 WORKDIR /work
+# *.pt (trained weights) is gitignored and excluded by .containerignore; mount weights at run time.
 COPY . /work
 
 # the property tests are the only check this model has, so they run at build time.

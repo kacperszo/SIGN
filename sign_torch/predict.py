@@ -1,7 +1,7 @@
 """Score and embed a directory of complexes with the trained SIGN, in one pass.
 
 `train.py` and `prepare.py` between them cover training but leave no way to run the model on
-new complexes, which is what the harness needs. This closes that: build the graphs, load the
+new complexes, which is what scoring needs. This closes that: build the graphs, load the
 checkpoint, and write both outputs from a single forward.
 
     prediction   pred_score, the affinity scalar

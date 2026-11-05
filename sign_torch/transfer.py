@@ -1,7 +1,7 @@
 """Move a trained encoder into a fresh SIGN, and freeze it if asked.
 
-The harness cuts checkpoints on the host (`gnnb encoder split`); this is the other half, and
-it has to live in the model's own container because loading weights back needs the model class.
+An encoder file is a checkpoint with the head tensors removed (see `HEAD_PREFIXES`); this loads
+one back. It has to live in the model's own container because loading weights needs the model class.
 
 **Where SIGN's boundary actually is.** `OutputLayer.forward` pools the atom features, runs them
 through an MLP, and returns *both* the scalar and the MLP's output:
@@ -28,9 +28,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-#: The task heads, by parameter-name prefix. Must agree with `encoder.head` for sign.torch in
-#: harness/registry.toml — the harness cuts the file, this loads it, and a disagreement between
-#: the two produces tensors that belong to neither side.
+#: The task heads, by parameter-name prefix. Whatever cuts an encoder file out of a
+#: checkpoint must drop exactly these; a disagreement produces tensors that belong to neither side.
 HEAD_PREFIXES = ("output_layer.output_layer", "pipool_layer")
 
 
@@ -43,8 +42,8 @@ def is_head(name: str) -> bool:
 def read_encoder(path: str) -> dict[str, torch.Tensor]:
     """Load an encoder file, accepting either of the two shapes it arrives in.
 
-    `gnnb encoder split` writes `{"encoder": {...}, "encoder_params": n, ...}`; a bare state
-    dict turns up when someone points this at a full checkpoint instead. Both are read, and
+    A file of the form `{"encoder": {...}, ...}` or a bare state dict is accepted; a bare state
+    dict also turns up when someone points this at a full checkpoint instead. Both are read, and
     anything that is not a tensor is dropped rather than being loaded into the model.
 
     `weights_only=True` is not negotiable: an encoder file is tensors, and opening a foreign
@@ -77,7 +76,7 @@ def transfer_encoder(model: nn.Module, path: str, freeze: bool = False) -> dict[
     if head_keys:
         raise SystemExit(
             f"{path} carries {len(head_keys)} head tensors ({head_keys[:3]}). That is a whole "
-            f"checkpoint, not an encoder — cut it with `gnnb encoder split` first, or the "
+            f"checkpoint, not an encoder — pass an encoder-only file (a state dict with the head tensors removed, see HEAD_PREFIXES), or the "
             f"fine-tune starts from the old task's head."
         )
     unknown = [k for k in encoder if k not in target]
@@ -120,7 +119,7 @@ def set_training_mode(model: nn.Module, training: bool, frozen_encoder: bool) ->
 
     A frozen encoder still has dropout in `Bond2BondLayer` and `Bond2AtomLayer`, and leaving it
     in train mode means the head learns against a representation that is re-sampled every step.
-    That is a defensible regulariser and a different experiment: `gnnb probe` fits a ridge on
+    That is a defensible regulariser and a different experiment: a ridge probe fits
     the deterministic embedding, and `--freeze-encoder` is meant to be the trainable analogue of
     it. So the encoder goes to eval and only the heads train.
     """

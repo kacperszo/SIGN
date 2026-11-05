@@ -6,9 +6,8 @@ a different way to be wrong — every failure here still runs, still trains, and
 curve. The curve is just worse than it should be, for a reason nobody can see.
 
 The load-bearing one is `test_embedding_survives_transfer`. SIGN's 128-dim embedding is
-produced inside `OutputLayer`, by the MLP that sits one line before the affinity Linear. The
-registry originally declared the whole of `output_layer` as the head, which would have left
-that MLP randomly initialised in every fine-tuned model — so `gnnb probe` would have been
+produced inside `OutputLayer`, by the MLP that sits one line before the affinity Linear. An earlier boundary declared the whole of `output_layer` as the head, which would have left
+that MLP randomly initialised in every fine-tuned model — so a probe on the embedding would have been
 measuring a representation that transfer never moved. This test fails on that boundary and
 passes on the corrected one.
 
@@ -46,7 +45,7 @@ def encoder_of(model: SIGN) -> dict[str, torch.Tensor]:
 
 @pytest.fixture()
 def encoder_file(tmp_path):
-    """An encoder cut from a trained-looking model, in the shape `gnnb encoder split` writes."""
+    """An encoder cut from a trained-looking model, in the `{"encoder": ...}` shape."""
     source = build(seed=0)
     path = tmp_path / "encoder.pt"
     torch.save({"encoder": encoder_of(source), "variant": "sign.torch"}, path)

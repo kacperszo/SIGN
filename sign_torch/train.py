@@ -15,7 +15,7 @@ bond offsets wrong would not raise; it would quietly wire one complex's bonds to
 
 **Fine-tuning.** `--init-encoder` loads a representation somebody else trained and attaches a
 fresh head; `--freeze-encoder` trains the head alone. The boundary and the reasons for it are in
-`transfer.py`. The outputs follow the harness contract in `harness/training.py` — `model.pt`,
+`transfer.py`. The outputs are `model.pt`,
 `history.csv` and `summary.json` — so a transfer curve can be put beside another model's without
 either trainer knowing about the other.
 
@@ -118,7 +118,7 @@ def main() -> None:
                              "itself and the other two go beside it, so older invocations keep "
                              "working.")
     parser.add_argument("--init-encoder", dest="init_encoder", default=None,
-                        help="encoder .pt from `gnnb encoder split` — start from a transferred "
+                        help="encoder-only .pt (no head tensors) — start from a transferred "
                              "representation with a fresh head")
     parser.add_argument("--freeze-encoder", dest="freeze_encoder", action="store_true",
                         help="train the heads only, with the encoder in eval mode so its "
@@ -230,7 +230,7 @@ def main() -> None:
             pearson = float("nan")
         return total / n, total_inter / n, rmse, pearson
 
-    # `--out` is a directory under the harness contract, but a .pt path is what every earlier
+    # `--out` is a directory, but a .pt path is what every earlier
     # invocation passed, so both are accepted and the three artefacts stay together either way.
     out = Path(args.out)
     if out.suffix == ".pt":
@@ -272,7 +272,7 @@ def main() -> None:
         mae, mae_inter, rmse, pearson = run_epoch(train, training=True)
         line = (f"epoch {epoch:3d}  train MAE {mae:6.3f}  inter {mae_inter:6.3f}  "
                 f"RMSE {rmse:6.3f}  R {pearson:6.3f}")
-        # The first five keys are the harness's standard history columns; the rest are SIGN's
+        # The first five keys are the generic history columns; the rest are SIGN's
         # own and are carried because losing the auxiliary term would hide half the objective.
         row = {"epoch": epoch, "train_loss": mae, "train_r": pearson,
                "val_loss": "", "val_r": "",

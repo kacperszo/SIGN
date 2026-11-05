@@ -7,7 +7,7 @@ auxiliary interaction matrix — which is why the original trains on both.
 Ported from the PaddlePaddle original in this repository. **There are no published weights**,
 so nothing here can be checked against reference numbers: the model has to be trained either
 way, and training it in Paddle would have cost a second framework, a second package index and
-a second GPU stack for one model. See CLAUDE.md.
+a second GPU stack for one model. See the README.
 """
 
 from __future__ import annotations
